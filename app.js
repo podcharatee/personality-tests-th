@@ -3,7 +3,7 @@
   const views = ['homeView','testView','resultView'];
   const meta = {
     disc:{symbol:'D',accent:'#f05a47',count:30,time:'5–7 นาที'},
-    mbti:{symbol:'M',accent:'#1768e8',count:31,time:'5–8 นาที'},
+    mbti:{symbol:'M',accent:'#1768e8',count:32,time:'5–8 นาที'},
     enneagram:{symbol:'9',accent:'#8e5bb7',count:81,time:'10–15 นาที'}
   };
   const DB_KEY = 'personality-lab:profiles:v1';
@@ -34,15 +34,31 @@
     db.currentId=id; db.profiles[id].updatedAt=new Date().toISOString(); saveDb(); return db.profiles[id];
   }
   function answerKey(id){ const p=currentProfile(); return p ? `personality-lab:answers:${p.id}:${id}` : ''; }
+  function mbtiSchemaKey(){ const p=currentProfile(); return p ? `personality-lab:mbti-schema:${p.id}` : ''; }
+  function migrateMbtiAnswers(parsed){
+    const schemaKey=mbtiSchemaKey();
+    if(!schemaKey || localStorage.getItem(schemaKey)==='32-v2' || Object.keys(parsed).length===0) return parsed;
+    const migrated={};
+    Object.entries(parsed).forEach(([index,value])=>{const n=Number(index);migrated[n>=24?n+1:n]=value;});
+    localStorage.setItem(answerKey('mbti'),JSON.stringify(migrated));
+    localStorage.setItem(schemaKey,'32-v2');
+    const p=currentProfile();
+    if(p?.results?.mbti){delete p.results.mbti;p.updatedAt=new Date().toISOString();saveDb();}
+    return migrated;
+  }
   function loadAnswers(id){
     const key=answerKey(id); if(!key) return {};
-    try { return JSON.parse(localStorage.getItem(key) || '{}'); }
+    try { const parsed=JSON.parse(localStorage.getItem(key) || '{}'); return id==='mbti'?migrateMbtiAnswers(parsed):parsed; }
     catch { return {}; }
   }
-  function saveAnswers(){ const key=answerKey(activeId); if(key) localStorage.setItem(key,JSON.stringify(answers)); }
+  function saveAnswers(){
+    const key=answerKey(activeId); if(key)localStorage.setItem(key,JSON.stringify(answers));
+    if(activeId==='mbti'&&mbtiSchemaKey())localStorage.setItem(mbtiSchemaKey(),'32-v2');
+  }
   function clearTestData(id){
     const p=currentProfile(); if(!p) return;
     localStorage.removeItem(answerKey(id));
+    if(id==='mbti'&&mbtiSchemaKey())localStorage.removeItem(mbtiSchemaKey());
     delete p.results[id]; p.updatedAt=new Date().toISOString(); saveDb();
   }
   function saveResult(id,payload){
@@ -94,6 +110,7 @@
     $('downloadBtn').disabled=done===0;
   }
   function renderHome(){
+    const answerCounts=Object.fromEntries(['disc','mbti','enneagram'].map(id=>[id,answeredFor(id)]));
     renderProfile();
     const p=currentProfile();
     const cards=[
@@ -102,7 +119,7 @@
       ['enneagram','Enneagram','แรงขับ ความกลัว และรูปแบบภายใน','บุคลิกภาพ 9 Type']
     ];
     $('testCards').innerHTML=cards.map(([id,title,desc,tag])=>{
-      const answered=answeredFor(id),total=totalFor(id),done=Boolean(p?.results?.[id]);
+      const answered=answerCounts[id],total=totalFor(id),done=Boolean(p?.results?.[id]);
       const pct=done?100:Math.round(answered/total*100);
       const cta=done?'ดูผลลัพธ์':answered?'ทำแบบประเมินต่อ':'เริ่มทำแบบประเมิน';
       return `<button class="test-card" data-test="${id}" style="--card-color:${meta[id].accent}"><span class="card-icon">${meta[id].symbol}</span><h3>${title}</h3><p>${desc}</p><div class="card-meta"><span>${tag}</span><span>${total} ข้อ · ${meta[id].time}</span></div><div class="card-progress"><span style="width:${pct}%"></span></div>${answered||done?`<div class="card-meta"><span>${done?'บันทึกผลแล้ว':`ทำแล้ว ${answered}/${total}`}</span><span>${pct}%</span></div>`:''}<div class="card-cta"><span>${cta}</span><b>→</b></div></button>`;
@@ -151,7 +168,7 @@
   }
   function selectAnswer(raw){
     if(activeId==='enneagram') answers[current]=Number(raw); else if(activeId==='disc') answers[current]=raw.charCodeAt(0)-65; else answers[current]=raw.toLowerCase();
-    saveAnswers(); renderQuestion(); setTimeout(()=>{if(current<flat.length-1)next();else if(answeredCount()===flat.length)next();},210);
+    saveAnswers(); renderQuestion(); setTimeout(()=>{if(answeredCount()===flat.length)renderResult();else if(current<flat.length-1)next();},210);
   }
   function next(){
     if(answers[current]===undefined) return;
@@ -183,7 +200,7 @@
     const type=pairs.map(([l,r])=>adjusted[l]>adjusted[r]?l:r).join(''),names=test.dimensions;
     $('resultHeading').textContent=`ผล MBTI ของ ${p.name}`; $('resultCode').textContent=type; $('resultSub').textContent=`คุณมีแนวโน้มไปทาง ${type.split('').map(k=>names[k].th).join(' · ')}`;
     $('resultGrid').innerHTML=pairs.map(([l,r])=>{const total=adjusted[l]+adjusted[r]||1,lp=Math.round(adjusted[l]/total*100),rp=100-lp;return `<div class="score-card"><div class="score-top"><span>${l} — ${names[l].th}</span><small>${names[r].th} — ${r}</small></div><div class="score-track" style="display:flex"><div class="score-fill" style="width:${lp}%;--score-color:#071f4c"></div><div class="score-fill" style="width:${rp}%;--score-color:#67b9ff"></div></div><div class="score-foot"><span>${adjusted[l]} คะแนน · ${lp}%</span><span>${rp}% · ${adjusted[r]} คะแนน</span></div></div>`;}).join('');
-    $('resultNote').innerHTML=`<strong>หมายเหตุ:</strong> คำนวณตามตารางให้คะแนนจากต้นฉบับ${tieNotes.length?` (${tieNotes.join(' และ ')})`:''} เอกสารที่ได้รับไม่แสดงคำถามข้อ 25 แม้ตารางคะแนนจะอ้างถึง จึงไม่นับข้อนี้`;
+    $('resultNote').innerHTML=`<strong>หมายเหตุ:</strong> คำนวณครบทั้ง 32 ข้อตามตารางให้คะแนนจากต้นฉบับ${tieNotes.length?` (${tieNotes.join(' และ ')})`:''}`;
     const pairText=pairs.map(([l,r])=>`${l} ${adjusted[l]} / ${r} ${adjusted[r]}`).join(' · ');
     lastResultText=`ชื่อ: ${p.name}\nผล MBTI: ${type}\n${pairText}`;
     saveResult('mbti',{code:type,short:pairText,scores:adjusted,text:lastResultText});
